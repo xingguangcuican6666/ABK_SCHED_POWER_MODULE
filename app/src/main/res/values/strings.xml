@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">ABK Sched Power Extension</string>
+    <string name="oobe_title">调度扩展初始化</string>
+    <string name="oobe_desc">首次启动内核后，ABK 通过此扩展完成调度初始化和策略持久化。</string>
+    <string name="oobe_save">保存并完成</string>
+    <string name="settings_title">调度扩展设置</string>
+    <string name="settings_reload">刷新当前配置</string>
+    <string name="settings_save">保存</string>
+    <string name="settings_summary">当前摘要</string>
+    <string name="mode_label">默认模式</string>
+    <string name="mode_balanced">保守优先</string>
+    <string name="mode_perf">性能优先</string>
+    <string name="display_state_label">保守模式显示状态</string>
+    <string name="per_app_label">启用每应用客制化</string>
+    <string name="rules_label">应用规则（每行：包名=balanced|perf[:state]）</string>
+    <string name="status_missing_host">缺少 ABK 宿主信息</string>
+    <string name="status_save_ok">配置已保存</string>
+    <string name="status_save_fail">配置保存失败</string>
+    <string name="status_load_fail">配置读取失败</string>
+    <string name="service_channel_name">调度扩展策略</string>
+    <string name="service_title">ABK 调度扩展</string>
+    <string name="service_text">正在根据当前前台应用应用调度策略</string>
+</resources>

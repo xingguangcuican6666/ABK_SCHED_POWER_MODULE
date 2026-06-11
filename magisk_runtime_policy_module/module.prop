@@ -1,0 +1,6 @@
+id=abk_sched_runtime_policy
+name=ABK Scheduler Runtime Policy
+version=0.1.0
+versionCode=1
+author=xingguangcuican
+description=Runtime policy bridge for ABK scheduler profiles. Aggressive disables software thermal throttling paths and prefers high refresh; conservative restores thermal services and prefers battery-friendly refresh.
