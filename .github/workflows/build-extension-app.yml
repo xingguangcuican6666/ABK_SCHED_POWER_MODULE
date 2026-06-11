@@ -34,8 +34,12 @@ jobs:
       - name: Rename release asset
         run: |
           set -euo pipefail
-          apk="$(find app/build/outputs/apk/release -type f -name '*release.apk' | head -n 1)"
-          [ -n "$apk" ] || { echo "release apk missing" >&2; exit 1; }
+          apk="$(find app/build/outputs/apk/release -type f -name '*-release*.apk' | head -n 1)"
+          if [ -z "$apk" ]; then
+            echo "release apk missing" >&2
+            find app/build/outputs/apk/release -maxdepth 3 -type f -print || true
+            exit 1
+          fi
           mkdir -p dist
           cp -f "$apk" "dist/abk-sched-power-extension-release.apk"
 
