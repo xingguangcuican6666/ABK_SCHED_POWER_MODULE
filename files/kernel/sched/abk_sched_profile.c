@@ -23,15 +23,21 @@
 #include "../../drivers/thermal/thermal_core.h"
 
 #define ABK_SCHED_PROFILE_PROC "abk_sched_profile"
+#define ABK_SCHED_PROFILE_STATUS_PROC "abk_sched_profile_status"
 #define ABK_DISPLAY_STATE_PROC "abk_sched_display_conservative_state"
 #define ABK_PROFILE_RETRY_MS 5000
 #define ABK_PROFILE_MAX_RETRIES 24
 
 static enum abk_sched_profile_mode abk_sched_profile_mode =
 	ABK_SCHED_PROFILE_CONSERVATIVE;
+static enum abk_sched_profile_mode abk_sched_profile_applied_mode =
+	ABK_SCHED_PROFILE_CONSERVATIVE;
 static struct delayed_work abk_profile_apply_work;
 static unsigned int abk_profile_apply_retries;
+static int abk_profile_last_apply_error;
+static const char *abk_profile_last_failed_subsystem = "none";
 static unsigned int abk_display_conservative_state = 9;
+static DEFINE_MUTEX(abk_profile_lock);
 static LIST_HEAD(abk_cpufreq_reqs);
 static DEFINE_MUTEX(abk_cpufreq_lock);
 
@@ -107,10 +113,15 @@ int abk_sched_profile_set_mode(enum abk_sched_profile_mode mode)
 	    mode != ABK_SCHED_PROFILE_AGGRESSIVE)
 		return -EINVAL;
 
+	mutex_lock(&abk_profile_lock);
 	WRITE_ONCE(abk_sched_profile_mode, mode);
-	pr_info("abk_sched_profile: switched to %s\n",
-		abk_sched_profile_name(mode));
 	abk_profile_apply_retries = 0;
+	WRITE_ONCE(abk_profile_last_apply_error, 0);
+	abk_profile_last_failed_subsystem = "pending";
+	mutex_unlock(&abk_profile_lock);
+
+	pr_info("abk_sched_profile: requested %s\n",
+		abk_sched_profile_name(mode));
 	abk_schedule_profile_apply(0);
 	return 0;
 }
@@ -564,48 +575,83 @@ static int abk_apply_ddr_profile(void)
 	return abk_ddr_cdev_set_state(state);
 }
 
-static bool abk_apply_runtime_profiles_once(void)
+static int abk_apply_runtime_profiles_once(enum abk_sched_profile_mode mode,
+					   const char **failed_subsystem)
 {
-	bool retry = false;
-	int ret;
+	const char *mode_name = abk_sched_profile_name(mode);
+	int ret = 0;
+	int step_ret;
 
-	ret = abk_apply_cpufreq_profile();
-	if (ret == -ENODEV) {
-		retry = true;
-	} else if (ret) {
-		pr_warn("abk_sched_profile: cpufreq profile apply failed: %d\n",
-			ret);
+	*failed_subsystem = "none";
+
+	step_ret = abk_apply_cpufreq_profile();
+	if (step_ret) {
+		pr_warn("abk_sched_profile: cpufreq apply failed for %s: %d\n",
+			mode_name, step_ret);
+		if (!ret) {
+			ret = step_ret;
+			*failed_subsystem = "cpufreq";
+		}
 	}
 
-	ret = abk_apply_gpu_profile();
-	if (ret == -ENODEV) {
-		retry = true;
-	} else if (ret) {
-		pr_warn("abk_sched_profile: gpu profile apply failed: %d\n", ret);
+	step_ret = abk_apply_gpu_profile();
+	if (step_ret) {
+		pr_warn("abk_sched_profile: gpu apply failed for %s: %d\n",
+			mode_name, step_ret);
+		if (!ret) {
+			ret = step_ret;
+			*failed_subsystem = "gpu";
+		}
 	}
 
-	ret = abk_apply_ddr_profile();
-	if (ret == -ENODEV) {
-		retry = true;
-	} else if (ret) {
-		pr_warn("abk_sched_profile: ddr profile apply failed: %d\n", ret);
+	step_ret = abk_apply_ddr_profile();
+	if (step_ret) {
+		pr_warn("abk_sched_profile: ddr apply failed for %s: %d\n",
+			mode_name, step_ret);
+		if (!ret) {
+			ret = step_ret;
+			*failed_subsystem = "ddr";
+		}
 	}
 
-	return retry;
+	return ret;
 }
 
 static void abk_profile_apply_workfn(struct work_struct *work)
 {
-	bool retry;
+	const char *failed_subsystem = "none";
+	enum abk_sched_profile_mode mode;
+	int ret;
 
-	abk_refresh_thermal_zones();
-	retry = abk_apply_runtime_profiles_once();
-	if (!retry)
+	mutex_lock(&abk_profile_lock);
+	mode = READ_ONCE(abk_sched_profile_mode);
+	pr_info("abk_sched_profile: apply start requested=%s applied=%s retries=%u\n",
+		abk_sched_profile_name(mode),
+		abk_sched_profile_name(READ_ONCE(abk_sched_profile_applied_mode)),
+		abk_profile_apply_retries);
+
+	ret = abk_apply_runtime_profiles_once(mode, &failed_subsystem);
+	if (!ret) {
+		abk_refresh_thermal_zones();
+		WRITE_ONCE(abk_sched_profile_applied_mode, mode);
+		WRITE_ONCE(abk_profile_last_apply_error, 0);
+		abk_profile_last_failed_subsystem = "none";
+		abk_profile_apply_retries = 0;
+		pr_info("abk_sched_profile: applied %s\n",
+			abk_sched_profile_name(mode));
+		mutex_unlock(&abk_profile_lock);
 		return;
+	}
 
-	if (abk_profile_apply_retries++ >= ABK_PROFILE_MAX_RETRIES)
+	WRITE_ONCE(abk_profile_last_apply_error, ret);
+	abk_profile_last_failed_subsystem = failed_subsystem;
+	pr_warn("abk_sched_profile: apply incomplete for %s at %s: %d\n",
+		abk_sched_profile_name(mode), failed_subsystem, ret);
+	if (abk_profile_apply_retries++ >= ABK_PROFILE_MAX_RETRIES) {
+		mutex_unlock(&abk_profile_lock);
 		return;
-
+	}
+	mutex_unlock(&abk_profile_lock);
 	abk_schedule_profile_apply(ABK_PROFILE_RETRY_MS);
 }
 
@@ -622,6 +668,21 @@ static int abk_display_state_show(struct seq_file *m, void *v)
 	return 0;
 }
 
+static int abk_sched_profile_status_show(struct seq_file *m, void *v)
+{
+	mutex_lock(&abk_profile_lock);
+	seq_printf(m, "requested=%s\n",
+		   abk_sched_profile_name(READ_ONCE(abk_sched_profile_mode)));
+	seq_printf(m, "applied=%s\n",
+		   abk_sched_profile_name(READ_ONCE(abk_sched_profile_applied_mode)));
+	seq_printf(m, "last_error=%d\n", READ_ONCE(abk_profile_last_apply_error));
+	seq_printf(m, "last_failed=%s\n", abk_profile_last_failed_subsystem);
+	seq_printf(m, "retries=%u\n", abk_profile_apply_retries);
+	seq_printf(m, "display_state=%u\n", READ_ONCE(abk_display_conservative_state));
+	mutex_unlock(&abk_profile_lock);
+	return 0;
+}
+
 static int abk_sched_profile_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, abk_sched_profile_show, NULL);
@@ -630,6 +691,11 @@ static int abk_sched_profile_open(struct inode *inode, struct file *file)
 static int abk_display_state_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, abk_display_state_show, NULL);
+}
+
+static int abk_sched_profile_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, abk_sched_profile_status_show, NULL);
 }
 
 static ssize_t abk_sched_profile_write(struct file *file,
@@ -672,8 +738,12 @@ static ssize_t abk_display_state_write(struct file *file,
 	if (kstrtouint(buf, 10, &state))
 		return -EINVAL;
 
+	mutex_lock(&abk_profile_lock);
 	WRITE_ONCE(abk_display_conservative_state, state);
 	abk_profile_apply_retries = 0;
+	WRITE_ONCE(abk_profile_last_apply_error, 0);
+	abk_profile_last_failed_subsystem = "pending";
+	mutex_unlock(&abk_profile_lock);
 	abk_schedule_profile_apply(0);
 	return len;
 }
@@ -692,6 +762,13 @@ static const struct proc_ops abk_display_state_proc_ops = {
 	.proc_lseek	= seq_lseek,
 	.proc_release	= single_release,
 	.proc_write	= abk_display_state_write,
+};
+
+static const struct proc_ops abk_sched_profile_status_proc_ops = {
+	.proc_open	= abk_sched_profile_status_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
 };
 
 static bool abk_sched_profile_is_enabled(void *data)
@@ -738,8 +815,12 @@ static int abk_sched_profile_run_command(const char *command, void *data)
 	if (!strcmp(verb, "display_state")) {
 		if (kstrtouint(value, 10, &state))
 			return -EINVAL;
+		mutex_lock(&abk_profile_lock);
 		WRITE_ONCE(abk_display_conservative_state, state);
 		abk_profile_apply_retries = 0;
+		WRITE_ONCE(abk_profile_last_apply_error, 0);
+		abk_profile_last_failed_subsystem = "pending";
+		mutex_unlock(&abk_profile_lock);
 		abk_schedule_profile_apply(0);
 		return 0;
 	}
@@ -750,7 +831,7 @@ static int abk_sched_profile_run_command(const char *command, void *data)
 static const struct abk_control_ops abk_sched_profile_ops = {
 	.id = "sched_power_backport",
 	.name = "Sched Power Backport",
-	.version = "0.2.0",
+	.version = "0.3.0",
 	.description = "Switch between conservative and aggressive CPU/GPU/DDR power profiles.",
 	.module_dir = "kernel/sched",
 	.web_root = "",
@@ -776,6 +857,8 @@ static int __init abk_sched_profile_init(void)
 
 	proc_create(ABK_SCHED_PROFILE_PROC, 0644, NULL,
 		    &abk_sched_profile_proc_ops);
+	proc_create(ABK_SCHED_PROFILE_STATUS_PROC, 0444, NULL,
+		    &abk_sched_profile_status_proc_ops);
 	proc_create(ABK_DISPLAY_STATE_PROC, 0644, NULL,
 		    &abk_display_state_proc_ops);
 
@@ -790,6 +873,7 @@ static void __exit abk_sched_profile_exit(void)
 {
 	cancel_delayed_work_sync(&abk_profile_apply_work);
 	remove_proc_entry(ABK_SCHED_PROFILE_PROC, NULL);
+	remove_proc_entry(ABK_SCHED_PROFILE_STATUS_PROC, NULL);
 	remove_proc_entry(ABK_DISPLAY_STATE_PROC, NULL);
 
 	if (IS_ENABLED(CONFIG_ABK_CONTROL))
