@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -44,19 +43,16 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private const val HOST_PROVIDER_FALLBACK = "com.abk.kernel.extensionhost"
-private const val EXTENSION_ID_FALLBACK = "sched_power_profile"
-
 class OobeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val hostAuthority = intent.getStringExtra(ABK_EXTENSION_EXTRA_HOST_PROVIDER)
             ?.takeIf { it.isNotBlank() }
-            ?: HOST_PROVIDER_FALLBACK
+            ?: ABK_EXTENSION_DEFAULT_HOST_PROVIDER
         val extensionId = intent.getStringExtra(ABK_EXTENSION_EXTRA_ID)
             ?.takeIf { it.isNotBlank() }
-            ?: EXTENSION_ID_FALLBACK
+            ?: ABK_EXTENSION_DEFAULT_ID
 
         setContent {
             SchedPowerTheme {

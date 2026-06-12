@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.abk.extension.schedpower"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.abk.extension.schedpower"

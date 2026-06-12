@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -70,9 +69,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val HOST_PROVIDER_FALLBACK = "com.abk.kernel.extensionhost"
-private const val EXTENSION_ID_FALLBACK = "sched_power_profile"
-
 private data class InstalledAppEntry(
     val packageName: String,
     val label: String,
@@ -87,10 +83,10 @@ class SettingsActivity : ComponentActivity() {
 
         val hostAuthority = intent.getStringExtra(ABK_EXTENSION_EXTRA_HOST_PROVIDER)
             ?.takeIf { it.isNotBlank() }
-            ?: HOST_PROVIDER_FALLBACK
+            ?: ABK_EXTENSION_DEFAULT_HOST_PROVIDER
         val extensionId = intent.getStringExtra(ABK_EXTENSION_EXTRA_ID)
             ?.takeIf { it.isNotBlank() }
-            ?: EXTENSION_ID_FALLBACK
+            ?: ABK_EXTENSION_DEFAULT_ID
 
         setContent {
             SchedPowerTheme {
@@ -552,7 +548,7 @@ private fun AppRuleDetail(
     }
 }
 
-private fun persistConfig(
+internal fun persistConfig(
     scope: CoroutineScope,
     context: Context,
     bridge: HostBridge,

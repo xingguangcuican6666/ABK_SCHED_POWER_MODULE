@@ -43,8 +43,8 @@ class SchedulerPolicyService : Service() {
     private fun tickOnce() {
         val bridge = HostBridge(
             resolver = contentResolver,
-            authority = "com.abk.kernel.extensionhost",
-            extensionId = "sched_power_profile"
+            authority = ABK_EXTENSION_DEFAULT_HOST_PROVIDER,
+            extensionId = ABK_EXTENSION_DEFAULT_ID
         )
         SchedulerPolicyController.applyCurrentConfig(this, bridge)
     }

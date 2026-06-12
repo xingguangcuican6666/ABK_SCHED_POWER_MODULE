@@ -5,8 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import org.json.JSONObject
 
-private const val EXTRA_ID = "com.abk.kernel.extra.EXTENSION_ID"
-
 data class ExtensionConfig(
     val defaultMode: String = "balanced",
     val conservativeDisplayState: Int = 9,
@@ -101,7 +99,7 @@ class HostBridge(
             uri,
             "get_extension_state",
             extensionId,
-            Bundle().apply { putString(EXTRA_ID, extensionId) }
+            Bundle().apply { putString(ABK_EXTENSION_EXTRA_ID, extensionId) }
         ) ?: return Result.failure(IllegalStateException("null bundle"))
         if (!bundle.getBoolean("success")) {
             return Result.failure(IllegalStateException(bundle.getString("error").orEmpty()))
@@ -117,7 +115,7 @@ class HostBridge(
             "put_extension_state",
             extensionId,
             Bundle().apply {
-                putString(EXTRA_ID, extensionId)
+                putString(ABK_EXTENSION_EXTRA_ID, extensionId)
                 putString("state_json", config.toJson())
             }
         ) ?: return Result.failure(IllegalStateException("null bundle"))
@@ -132,7 +130,7 @@ class HostBridge(
             uri,
             "get_control_status",
             extensionId,
-            Bundle().apply { putString(EXTRA_ID, extensionId) }
+            Bundle().apply { putString(ABK_EXTENSION_EXTRA_ID, extensionId) }
         ) ?: return Result.failure(IllegalStateException("null bundle"))
         if (!bundle.getBoolean("success")) {
             return Result.failure(IllegalStateException(bundle.getString("error").orEmpty()))
@@ -146,7 +144,7 @@ class HostBridge(
             "run_control_command",
             extensionId,
             Bundle().apply {
-                putString(EXTRA_ID, extensionId)
+                putString(ABK_EXTENSION_EXTRA_ID, extensionId)
                 putString("command", command)
             }
         ) ?: return Result.failure(IllegalStateException("null bundle"))
@@ -161,7 +159,7 @@ class HostBridge(
             uri,
             "get_foreground_package",
             extensionId,
-            Bundle().apply { putString(EXTRA_ID, extensionId) }
+            Bundle().apply { putString(ABK_EXTENSION_EXTRA_ID, extensionId) }
         ) ?: return Result.failure(IllegalStateException("null bundle"))
         if (!bundle.getBoolean("success")) {
             return Result.failure(IllegalStateException(bundle.getString("error").orEmpty()))
