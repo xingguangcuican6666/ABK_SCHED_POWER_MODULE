@@ -37,6 +37,7 @@ static unsigned int abk_profile_apply_retries;
 static int abk_profile_last_apply_error;
 static const char *abk_profile_last_failed_subsystem = "none";
 static unsigned int abk_display_conservative_state = 9;
+static unsigned long abk_display_effective_state = 9;
 static DEFINE_MUTEX(abk_profile_lock);
 static LIST_HEAD(abk_cpufreq_reqs);
 static DEFINE_MUTEX(abk_cpufreq_lock);
@@ -87,6 +88,21 @@ static bool abk_type_prefix(const char *type, const char *prefix)
 
 	len = strlen(prefix);
 	return !strncmp(type, prefix, len);
+}
+
+static bool abk_display_type(const char *type)
+{
+	return abk_type_eq(type, "display-fps") ||
+	       abk_type_eq(type, "fps") ||
+	       abk_type_eq(type, "refresh-rate");
+}
+
+static unsigned long abk_display_target_state(void)
+{
+	if (abk_sched_profile_aggressive())
+		return 0;
+
+	return READ_ONCE(abk_display_conservative_state);
 }
 
 static void abk_schedule_profile_apply(unsigned long delay_ms)
@@ -179,14 +195,11 @@ unsigned long abk_sched_profile_override_thermal_target(const char *type,
 	    abk_type_eq(type, "backlight"))
 		return 0;
 
-	if (abk_type_eq(type, "display-fps") ||
-	    abk_type_eq(type, "fps") ||
-	    abk_type_eq(type, "refresh-rate")) {
+	if (abk_display_type(type)) {
 		if (abk_sched_profile_aggressive())
 			return 0;
 
-		display_state = min_t(unsigned long,
-				      READ_ONCE(abk_display_conservative_state),
+		display_state = min_t(unsigned long, abk_display_target_state(),
 				      max_state);
 		return max(target, display_state);
 	}
@@ -201,7 +214,7 @@ unsigned long abk_sched_profile_override_thermal_target(const char *type,
 		return max(target, ddr_floor);
 	}
 
-	if (abk_type_eq(type, "display-fps") ||
+	if (abk_display_type(type) ||
 	    abk_type_eq(type, "panel0-backlight") ||
 	    abk_type_eq(type, "gpu") ||
 	    abk_type_eq(type, "gpu-dump-skip-cdev") ||
@@ -400,6 +413,88 @@ static int abk_refresh_one_thermal_zone(struct thermal_zone_device *tz, void *ar
 static void abk_refresh_thermal_zones(void)
 {
 	for_each_thermal_zone(abk_refresh_one_thermal_zone, NULL);
+}
+
+struct abk_display_apply_ctx {
+	unsigned long target_state;
+	unsigned long effective_state;
+	int ret;
+	bool matched;
+};
+
+static int abk_apply_one_display_cdev(struct thermal_cooling_device *cdev,
+				      void *arg)
+{
+	struct abk_display_apply_ctx *ctx = arg;
+	unsigned long max_state = cdev->max_state;
+	unsigned long target_state;
+	unsigned long effective_state;
+	int ret;
+
+	if (!abk_display_type(cdev->type))
+		return 0;
+
+	ctx->matched = true;
+	if (!cdev->ops || !cdev->ops->set_cur_state) {
+		if (!ctx->ret)
+			ctx->ret = -EOPNOTSUPP;
+		return 0;
+	}
+
+	target_state = ctx->target_state;
+	if (cdev->ops->get_max_state) {
+		ret = cdev->ops->get_max_state(cdev, &max_state);
+		if (ret) {
+			if (!ctx->ret)
+				ctx->ret = ret;
+			return 0;
+		}
+	}
+
+	target_state = min(target_state, max_state);
+	ret = cdev->ops->set_cur_state(cdev, target_state);
+	if (ret) {
+		if (!ctx->ret)
+			ctx->ret = ret;
+		return 0;
+	}
+
+	thermal_cooling_device_stats_update(cdev, target_state);
+	effective_state = target_state;
+	if (cdev->ops->get_cur_state &&
+	    !cdev->ops->get_cur_state(cdev, &effective_state))
+		ctx->effective_state = effective_state;
+	else
+		ctx->effective_state = target_state;
+
+	return 0;
+}
+
+static int abk_apply_display_profile(void)
+{
+	struct abk_display_apply_ctx ctx = {
+		.target_state = abk_display_target_state(),
+		.effective_state = ULONG_MAX,
+	};
+	int ret;
+
+	ret = for_each_thermal_cooling_device(abk_apply_one_display_cdev, &ctx);
+	if (ret)
+		return ret;
+
+	if (ctx.ret)
+		return ctx.ret;
+
+	if (!ctx.matched) {
+		WRITE_ONCE(abk_display_effective_state, ctx.target_state);
+		return 0;
+	}
+
+	if (ctx.effective_state == ULONG_MAX)
+		ctx.effective_state = ctx.target_state;
+
+	WRITE_ONCE(abk_display_effective_state, ctx.effective_state);
+	return 0;
 }
 
 static unsigned long abk_devfreq_lowest_freq(struct devfreq *df)
@@ -614,6 +709,18 @@ static int abk_apply_runtime_profiles_once(enum abk_sched_profile_mode mode,
 		}
 	}
 
+	abk_refresh_thermal_zones();
+
+	step_ret = abk_apply_display_profile();
+	if (step_ret) {
+		pr_warn("abk_sched_profile: display apply failed for %s: %d\n",
+			mode_name, step_ret);
+		if (!ret) {
+			ret = step_ret;
+			*failed_subsystem = "display";
+		}
+	}
+
 	return ret;
 }
 
@@ -632,7 +739,6 @@ static void abk_profile_apply_workfn(struct work_struct *work)
 
 	ret = abk_apply_runtime_profiles_once(mode, &failed_subsystem);
 	if (!ret) {
-		abk_refresh_thermal_zones();
 		WRITE_ONCE(abk_sched_profile_applied_mode, mode);
 		WRITE_ONCE(abk_profile_last_apply_error, 0);
 		abk_profile_last_failed_subsystem = "none";
@@ -678,7 +784,9 @@ static int abk_sched_profile_status_show(struct seq_file *m, void *v)
 	seq_printf(m, "last_error=%d\n", READ_ONCE(abk_profile_last_apply_error));
 	seq_printf(m, "last_failed=%s\n", abk_profile_last_failed_subsystem);
 	seq_printf(m, "retries=%u\n", abk_profile_apply_retries);
-	seq_printf(m, "display_state=%u\n", READ_ONCE(abk_display_conservative_state));
+	seq_printf(m, "display_state=%lu\n", READ_ONCE(abk_display_effective_state));
+	seq_printf(m, "conservative_display_state=%u\n",
+		   READ_ONCE(abk_display_conservative_state));
 	mutex_unlock(&abk_profile_lock);
 	return 0;
 }
