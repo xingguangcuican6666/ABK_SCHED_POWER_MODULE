@@ -40,6 +40,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP/android-signing"
           printf '%s' "$ANDROID_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.jks"
 
+      - name: Verify release signing keystore
+        env:
+          ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          keytool -list \
+            -keystore "$RUNNER_TEMP/android-signing/release.jks" \
+            -storepass "$ANDROID_SIGNING_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_SIGNING_KEY_ALIAS" >/dev/null
+
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
