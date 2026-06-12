@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseSigningStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
+val releaseSigningStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+val releaseSigningKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+val releaseSigningKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseSigningStoreFile,
+    releaseSigningStorePassword,
+    releaseSigningKeyAlias,
+    releaseSigningKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.abk.extension.schedpower"
     compileSdk = 35
@@ -15,6 +26,17 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseSigningStoreFile!!)
+                storePassword = releaseSigningStorePassword
+                keyAlias = releaseSigningKeyAlias
+                keyPassword = releaseSigningKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -22,6 +44,9 @@ android {
         }
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
