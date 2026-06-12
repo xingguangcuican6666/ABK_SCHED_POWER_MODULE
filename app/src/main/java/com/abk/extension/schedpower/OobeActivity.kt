@@ -1,102 +1,191 @@
 package com.abk.extension.schedpower
 
-import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.TextView
-import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-class OobeActivity : Activity() {
+private const val HOST_PROVIDER_FALLBACK = "com.abk.kernel.extensionhost"
+private const val EXTENSION_ID_FALLBACK = "sched_power_profile"
+
+class OobeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val hostAuthority = intent.getStringExtra("com.abk.kernel.extra.HOST_PROVIDER").orEmpty()
-        val extensionId = intent.getStringExtra("com.abk.kernel.extra.EXTENSION_ID").orEmpty()
-        if (hostAuthority.isBlank() || extensionId.isBlank()) {
-            Toast.makeText(this, getString(R.string.status_missing_host), Toast.LENGTH_LONG).show()
-            finish()
-            return
-        }
+        val hostAuthority = intent.getStringExtra(ABK_EXTENSION_EXTRA_HOST_PROVIDER)
+            ?.takeIf { it.isNotBlank() }
+            ?: HOST_PROVIDER_FALLBACK
+        val extensionId = intent.getStringExtra(ABK_EXTENSION_EXTRA_ID)
+            ?.takeIf { it.isNotBlank() }
+            ?: EXTENSION_ID_FALLBACK
 
-        val bridge = HostBridge(contentResolver, hostAuthority, extensionId)
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
-        }
-        val title = TextView(this).apply { text = getString(R.string.oobe_title) }
-        val desc = TextView(this).apply { text = getString(R.string.oobe_desc) }
-        val group = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-        }
-        val balanced = RadioButton(this).apply { text = getString(R.string.mode_balanced) }
-        val perf = RadioButton(this).apply { text = getString(R.string.mode_perf) }
-        group.addView(balanced)
-        group.addView(perf)
-        balanced.isChecked = true
-        val displayLabel = TextView(this).apply { text = getString(R.string.display_state_label) }
-        val displayState = EditText(this).apply { setText("9") }
-        val perApp = CheckBox(this).apply { text = getString(R.string.per_app_label) }
-        val rulesLabel = TextView(this).apply { text = getString(R.string.rules_label) }
-        val rulesEditor = EditText(this).apply {
-            minLines = 4
-        }
-        val save = Button(this).apply { text = getString(R.string.oobe_save) }
-
-        save.setOnClickListener {
-            val config = ExtensionConfig(
-                defaultMode = if (perf.isChecked) "perf" else "balanced",
-                conservativeDisplayState = displayState.text.toString().toIntOrNull() ?: 9,
-                perAppEnabled = perApp.isChecked,
-                oobeCompleted = true,
-                appRules = parseRules(rulesEditor.text.toString())
-            )
-            val result = bridge.write(config)
-            if (result.isSuccess) {
-                val applyResult = SchedulerPolicyController.applyCurrentConfig(this, bridge)
-                if (applyResult.isSuccess) {
-                    startForegroundService(Intent(this, SchedulerPolicyService::class.java))
-                    Toast.makeText(this, getString(R.string.status_save_ok), Toast.LENGTH_SHORT).show()
-                    finish()
-                } else {
-                    Toast.makeText(this, applyResult.exceptionOrNull()?.message ?: getString(R.string.status_save_fail), Toast.LENGTH_LONG).show()
-                }
-            } else {
-                Toast.makeText(this, result.exceptionOrNull()?.message ?: getString(R.string.status_save_fail), Toast.LENGTH_LONG).show()
+        setContent {
+            SchedPowerTheme {
+                OobeRoute(
+                    bridge = remember { HostBridge(contentResolver, hostAuthority, extensionId) },
+                    onComplete = {
+                        startActivity(
+                            Intent(this, SettingsActivity::class.java)
+                                .putExtra(ABK_EXTENSION_EXTRA_HOST_PROVIDER, hostAuthority)
+                                .putExtra(ABK_EXTENSION_EXTRA_ID, extensionId)
+                        )
+                        finish()
+                    }
+                )
             }
         }
+    }
+}
 
-        root.addView(title)
-        root.addView(desc)
-        root.addView(group)
-        root.addView(displayLabel)
-        root.addView(displayState)
-        root.addView(perApp)
-        root.addView(rulesLabel)
-        root.addView(rulesEditor)
-        root.addView(save)
-        setContentView(root)
+@Composable
+private fun OobeRoute(
+    bridge: HostBridge,
+    onComplete: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var defaultMode by remember { mutableStateOf("balanced") }
+    var displayState by remember { mutableStateOf("9") }
+    var perAppEnabled by remember { mutableStateOf(false) }
+    var existingRules by remember { mutableStateOf<List<ExtensionConfig.AppRule>>(emptyList()) }
+    var statusMessage by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        val loaded = withContext(Dispatchers.IO) { bridge.read() }.getOrElse { ExtensionConfig() }
+        defaultMode = loaded.defaultMode
+        displayState = loaded.conservativeDisplayState.toString()
+        perAppEnabled = loaded.perAppEnabled
+        existingRules = loaded.appRules
     }
 
-    private fun parseRules(raw: String): List<ExtensionConfig.AppRule> =
-        raw.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .mapNotNull { line ->
-                val parts = line.split("=", limit = 2)
-                if (parts.size != 2) return@mapNotNull null
-                val packageName = parts[0].trim()
-                if (packageName.isBlank()) return@mapNotNull null
-                val valueParts = parts[1].split(":", limit = 2)
-                val mode = valueParts[0].trim().ifBlank { "balanced" }
-                val state = valueParts.getOrNull(1)?.trim()?.toIntOrNull() ?: 9
-                ExtensionConfig.AppRule(packageName, mode, state)
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text(stringResource(R.string.oobe_title)) })
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.oobe_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.oobe_desc),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
-            .toList()
+
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.global_title), style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = defaultMode != "perf",
+                            onClick = { defaultMode = "balanced" },
+                            label = { Text(stringResource(R.string.mode_balanced)) },
+                            leadingIcon = if (defaultMode != "perf") ({ Icon(Icons.Default.Check, contentDescription = null) }) else null
+                        )
+                        FilterChip(
+                            selected = defaultMode == "perf",
+                            onClick = { defaultMode = "perf" },
+                            label = { Text(stringResource(R.string.mode_perf)) },
+                            leadingIcon = if (defaultMode == "perf") ({ Icon(Icons.Default.Check, contentDescription = null) }) else null
+                        )
+                    }
+                    OutlinedTextField(
+                        value = displayState,
+                        onValueChange = { displayState = it },
+                        label = { Text(stringResource(R.string.display_state_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(stringResource(R.string.per_app_label), modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = perAppEnabled,
+                            onCheckedChange = { perAppEnabled = it }
+                        )
+                    }
+                    if (statusMessage.isNotBlank()) {
+                        Text(statusMessage, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        onClick = {
+                            persistConfig(
+                                scope = scope,
+                                context = context,
+                                bridge = bridge,
+                                next = ExtensionConfig(
+                                    defaultMode = defaultMode,
+                                    conservativeDisplayState = displayState.toIntOrNull() ?: 9,
+                                    perAppEnabled = perAppEnabled,
+                                    oobeCompleted = true,
+                                    appRules = existingRules
+                                ),
+                                onApplied = { onComplete() },
+                                onError = { statusMessage = it }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.oobe_save))
+                    }
+                }
+            }
+        }
+    }
 }

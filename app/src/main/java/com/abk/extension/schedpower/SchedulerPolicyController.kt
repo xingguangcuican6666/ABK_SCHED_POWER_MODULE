@@ -7,7 +7,7 @@ internal object SchedulerPolicyController {
         val config = bridge.read().getOrElse { return Result.failure(it) }
         val foreground = bridge.readForegroundPackage().getOrElse { "" }.trim()
         val effective = if (config.perAppEnabled) {
-            config.appRules.firstOrNull { it.packageName == foreground }
+            config.appRules.firstOrNull { it.enabled && it.packageName == foreground }
         } else {
             null
         }

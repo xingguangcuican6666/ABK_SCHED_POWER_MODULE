@@ -16,6 +16,7 @@ data class ExtensionConfig(
 ) {
     data class AppRule(
         val packageName: String,
+        val enabled: Boolean = true,
         val mode: String,
         val conservativeDisplayState: Int,
     )
@@ -36,6 +37,7 @@ data class ExtensionConfig(
                             put(
                                 JSONObject()
                                     .put("package_name", rule.packageName)
+                                    .put("enabled", rule.enabled)
                                     .put("mode", rule.mode)
                                     .put("conservative_display_state", rule.conservativeDisplayState)
                             )
@@ -69,6 +71,7 @@ data class ExtensionConfig(
                     add(
                         AppRule(
                             packageName = packageName,
+                            enabled = item.optBoolean("enabled", true),
                             mode = item.optString("mode").ifBlank { "balanced" },
                             conservativeDisplayState = item.optInt("conservative_display_state", 9)
                         )
